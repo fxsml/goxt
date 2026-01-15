@@ -4,90 +4,107 @@ Guide for AI agents working on this codebase.
 
 ## Project Overview
 
-`goxt` is a minimal task runner for Go projects. It consists of:
+`goxt` is a minimal task runner for Go projects with two modes:
 
-1. **A convention**: `goxt.go` files with exported `func() error` functions as tasks
-2. **An optional CLI**: `goxt` binary that parses `goxt.go` and provides enhanced help
+1. **Mode A (CLI-only)**: Zero dependencies, tasks run via `goxt` CLI
+2. **Mode B (Library)**: One dependency, adds `Deps()` and `go run` support
 
 ## Architecture
 
 ```
-main.go          # Single-file CLI (~250 lines)
-├── main()       # Entry point, handles init/help/task dispatch
-├── initGoxtFile() # Creates goxt.go from template
-├── parseTasks() # Parses goxt.go using go/ast and go/doc
-├── findGoxtFile() # Walks up directory tree to find goxt.go
-└── printHelp()  # Displays tasks with descriptions
+github.com/fxsml/goxt/
+├── goxt.go              # Library: Run(), Deps()
+├── cmd/goxt/main.go     # CLI binary
+├── go.mod
+├── README.md
+└── AGENTS.md
+```
+
+### Library (`goxt.go`)
+
+```go
+package goxt
+
+func Run(tasks ...func() error)           // Register and execute tasks
+func Deps(tasks ...func() error) error    // Run dependencies once
+```
+
+### CLI (`cmd/goxt/main.go`)
+
+```
+main()
+├── --init handling      # Create goxt.go (Mode A or B)
+├── parseGoxtFile()      # Parse using go/ast, detect main()
+├── printHelp()          # Show tasks with godoc descriptions
+├── runGoxtFile()        # Has main() → go run goxt.go
+└── runWithWrapper()     # No main() → generate temp wrapper
 ```
 
 ## Key Design Decisions
 
-### Stdlib only
-No external dependencies. Uses:
+### Dual mode support
+- Mode A: Zero deps, CLI generates temp wrapper with main()
+- Mode B: Library import, user provides main() with `goxt.Run()`
+
+### Stdlib only (for CLI)
+Uses:
 - `go/ast`, `go/parser`, `go/token` - Parse Go source
 - `go/doc` - Extract documentation
-- `os/exec` - Run `go run goxt.go`
+- `os/exec` - Run `go run`
 
 ### Convention over configuration
-- Exported functions with `func() error` signature are tasks
+- Exported `func() error` functions are tasks
 - Godoc comments become descriptions
-- CamelCase function names become kebab-case task names
-
-### Backwards compatible
-- `go run goxt.go <task>` always works (no goxt required)
-- `goxt` just adds convenience (init, better help)
-
-## The `goxt.go` Template
-
-The template in `goxtTemplate` constant generates a working goxt.go with:
-- Minimal boilerplate (~30 lines)
-- Example tasks showing args and flags patterns
-- `//go:build ignore` tag (excluded from normal builds, but `go run` ignores tags)
+- CamelCase → kebab-case (`RunTests` → `run-tests`)
 
 ## Task Detection
 
-A function is detected as a task if:
+A function is a task if:
 1. Exported (uppercase first letter)
 2. No receiver (not a method)
 3. No parameters
-4. Returns exactly one value of type `error`
+4. Returns exactly `error`
 5. Not named `Tasks` (reserved)
+
+## Temp Wrapper Generation (Mode A)
+
+When goxt.go has no `main()`, the CLI:
+1. Reads goxt.go content
+2. Appends a generated main() that calls the task
+3. Writes to `.goxt_tmp.go`
+4. Runs `go run .goxt_tmp.go`
+5. Cleans up temp file
 
 ## Common Tasks
 
 ```bash
-# Build
-go build .
+# Build everything
+go build ./...
 
-# Test
-go test .
+# Build and install CLI
+go install ./cmd/goxt
 
-# Run locally
-go run . init      # Test init command
-go run .           # Test help output
-go run . <task>    # Test running a task
+# Test Mode A
+cd /tmp && goxt --init && goxt build
+
+# Test Mode B
+cd /tmp && goxt --init --lib && go run goxt.go build
 ```
 
 ## Code Style
 
-- Single file for simplicity
-- No interfaces (concrete types only)
-- Minimal error wrapping
+- Library is minimal (~100 lines)
+- CLI handles all complexity
+- No external dependencies
 - Exit codes: 0 success, 1 error
 
 ## Extending
 
-### Adding goxt commands
-Add handling in `main()` before `findGoxtFile()`:
-```go
-if len(os.Args) >= 2 && os.Args[1] == "newcmd" {
-    // handle newcmd
-    return
-}
-```
+### Adding CLI flags
+Add to `main()` with `hasFlag()` check.
+
+### Adding library functions
+Add to `goxt.go`, export for user access.
 
 ### Changing task detection
-Modify `isTaskFunc()` to accept different signatures.
-
-### Changing name conversion
-Modify `camelToKebab()` for different naming conventions.
+Modify `isTaskFunc()` in `cmd/goxt/main.go`.
